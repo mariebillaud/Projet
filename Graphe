@@ -1,0 +1,115 @@
+import csv
+import os
+import pandas as pd
+from time import time
+import pickle
+import bisect
+os.chdir('/Users/marcoul/Documents/CPES2/Informatique/Projet/IDFM_gtfs')
+
+
+def heure(expression) :
+    liste_horaire = expression.split(':')
+    secondes = int(liste_horaire[0])*60*60 + int(liste_horaire[1])*60 + int(liste_horaire[2])
+    return secondes
+
+Graphe = {}
+DicoParents = {}
+stopdict = {}
+
+#Récupération des liens entre identifiants stations, leurs noms et coorsonnées
+
+with open('stops.txt',newline='') as stops :
+    stopread = csv.DictReader(stops)
+    for i in stopread :
+        stopdict[i['stop_id']] = {'nom':i['stop_name'],'long':float(i['stop_lon']),'lat':float(i['stop_lat'])}
+        if i['location_type'] == '0' :
+            parent,enfant = i['parent_station'],i['stop_id']
+            if parent in Graphe :
+                Graphe[parent][enfant]=(0,'entrée')
+            else :
+                Graphe[parent] = {enfant:(0,'entrée')}
+            if parent in DicoParents :
+                DicoParents[parent].append(enfant)
+            else :
+                DicoParents[parent] = [enfant]
+
+#Récupération des temps de correspondance et ajout au graphe
+
+with open('transfers.txt',newline='') as trans:
+    transfers = csv.DictReader(trans)
+    for i in transfers :
+        départ,arrivée,durée = i['from_stop_id'],i['to_stop_id'],int(i['min_transfer_time'])
+        if départ in Graphe :
+            Graphe[départ][arrivée] = (durée,'correspondance')
+        else :
+            Graphe[départ] = {arrivée : (durée,'correspondance')}
+
+#Récupération des transports sur une certaine plage horaire
+
+with open('stop_times.txt') as stopfichier:
+    stopdata = pd.read_csv(stopfichier)
+
+stopdata['arrival_time'] = stopdata['arrival_time'].apply(heure)
+stopdata['arrival_time'].astype(int)
+stopdata['departure_time'] = stopdata['departure_time'].apply(heure)
+stopdata['departure_time'].astype(int)
+
+datahoraire = stopdata.query('departure_time > 30000 and departure_time < 40000')
+print(datahoraire)
+datadict = datahoraire.to_dict('records')
+
+#Ajout au graphe des transports
+
+en_cours = ''
+for i in datadict :
+    if i['trip_id'] == en_cours :
+        arrivée = i['stop_id']
+        durée = i['arrival_time'] - h_départ
+        if départ in Graphe:
+            if arrivée in Graphe[départ] :
+                if durée < Graphe[départ][arrivée][0] :
+                    Graphe[départ][arrivée] = (durée, i['trip_id'])
+            else : Graphe[départ][arrivée] = (durée, i['trip_id'])
+        else:
+            Graphe[départ] = {arrivée: (durée, i['trip_id'])}
+    départ = i['stop_id']
+    h_départ = i['departure_time']
+    en_cours = i['trip_id']
+
+tripdict = {}
+routedict = {}
+agencydict = {}
+
+#Récupération des identifiants et informations sur les lignes
+
+with open('trips.txt') as trips :
+    tripread = csv.DictReader(trips)
+    for i in tripread :
+        tripdict[i['trip_id']] = {'route':i['route_id'],'direction':i['trip_headsign']}
+
+
+with open('routes.txt') as routes :
+    routread = csv.DictReader(routes)
+    for i in routread :
+        routedict[i['route_id']] = {'agence':i['agency_id'],'ligne':i['route_short_name']}
+
+with open('agency.txt') as agency :
+    agencread = csv.DictReader(agency)
+    for i in agencread :
+        agencydict[i['agency_id']] = i['agency_name']
+
+
+for trajet in tripdict :
+    route = routedict[tripdict[trajet]['route']]
+    ligne = route['ligne']
+    agence = agencydict[route['agence']]
+    tripdict[trajet]['ligne'] = ligne
+    tripdict[trajet]['agence'] = agence
+
+
+#Réunion des données sur un dictionnaire et enregistrement sur le disque
+
+Data = {'Graphe':Graphe,'DicoParents':DicoParents,'DicoTrips':tripdict,'DicoStops':stopdict}
+
+with open('graphe_st.pickle','wb') as file :
+    pickle.dump(Data,file,pickle.HIGHEST_PROTOCOL)
